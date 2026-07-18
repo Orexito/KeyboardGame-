@@ -1,0 +1,89 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+
+local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+local speedGainedEvent = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("SpeedGained")
+local randomGenerator = Random.new()
+
+local speedIconImage = "rbxassetid://16408406294"
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "SpeedGainFeedback"
+screenGui.IgnoreGuiInset = true
+screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 10
+screenGui.Parent = playerGui
+
+local function formatSpeedGain(speedGain)
+	if speedGain % 1 == 0 then
+		return string.format("+%d", speedGain)
+	end
+
+	return string.format("+%.1f", speedGain)
+end
+
+local function showSpeedGain(speedGain)
+	local container = Instance.new("Frame")
+	container.AnchorPoint = Vector2.new(0.5, 0.5)
+	container.BackgroundTransparency = 1
+	container.Position = UDim2.fromScale(0.5, 0.5)
+	container.Size = UDim2.fromOffset(220, 56)
+	container.ZIndex = 10
+	container.Parent = screenGui
+
+	local listLayout = Instance.new("UIListLayout")
+	listLayout.FillDirection = Enum.FillDirection.Horizontal
+	listLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+	listLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	listLayout.Padding = UDim.new(0, 6)
+	listLayout.Parent = container
+
+	local textLabel = Instance.new("TextLabel")
+	textLabel.BackgroundTransparency = 1
+	textLabel.LayoutOrder = 1
+	textLabel.Size = UDim2.fromOffset(120, 56)
+	textLabel.Font = Enum.Font.GothamBlack
+	textLabel.Text = formatSpeedGain(speedGain)
+	textLabel.TextColor3 = Color3.new(1, 1, 1)
+	textLabel.TextSize = 32
+	textLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+	textLabel.TextStrokeTransparency = 0
+	textLabel.TextTransparency = 0
+	textLabel.ZIndex = 10
+	textLabel.Parent = container
+
+	local iconLabel = Instance.new("ImageLabel")
+	iconLabel.BackgroundTransparency = 1
+	iconLabel.LayoutOrder = 2
+	iconLabel.Size = UDim2.fromOffset(40, 40)
+	iconLabel.Image = speedIconImage
+	iconLabel.ImageTransparency = 0
+	iconLabel.ZIndex = 10
+	iconLabel.Parent = container
+
+	local angle = randomGenerator:NextNumber(0, math.pi * 2)
+	local distance = randomGenerator:NextNumber(70, 150)
+	local offset = Vector2.new(math.cos(angle), math.sin(angle)) * distance
+	local tweenInfo = TweenInfo.new(0.65, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+	local positionTween = TweenService:Create(container, tweenInfo, {
+		Position = UDim2.new(0.5, offset.X, 0.5, offset.Y),
+	})
+	local textFadeTween = TweenService:Create(textLabel, tweenInfo, {
+		TextTransparency = 1,
+		TextStrokeTransparency = 1,
+	})
+	local iconFadeTween = TweenService:Create(iconLabel, tweenInfo, {
+		ImageTransparency = 1,
+	})
+
+	positionTween:Play()
+	textFadeTween:Play()
+	iconFadeTween:Play()
+	positionTween.Completed:Connect(function()
+		container:Destroy()
+	end)
+end
+
+speedGainedEvent.OnClientEvent:Connect(showSpeedGain)
