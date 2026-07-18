@@ -1,0 +1,357 @@
+local CollectionService = game:GetService("CollectionService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local ProgressionConfig = require(ReplicatedStorage:WaitForChild("ProgressionConfig"))
+
+local remotes = ReplicatedStorage:FindFirstChild("Remotes") or Instance.new("Folder")
+remotes.Name = "Remotes"
+remotes.Parent = ReplicatedStorage
+
+local speedGainedEvent = remotes:FindFirstChild("SpeedGained") or Instance.new("RemoteEvent")
+speedGainedEvent.Name = "SpeedGained"
+speedGainedEvent.Parent = remotes
+
+local adminAdjustSpeedEvent = remotes:FindFirstChild("AdminAdjustSpeed") or Instance.new("RemoteEvent")
+adminAdjustSpeedEvent.Name = "AdminAdjustSpeed"
+adminAdjustSpeedEvent.Parent = remotes
+
+-- Igual que en AdminPanel: se construye un set en minúsculas a partir de
+-- ProgressionConfig.AdminUsernames para poder comparar sin importar mayúsculas.
+-- Esta es la comprobación que de verdad importa; el cliente solo decide si
+-- se muestra el botón, pero aquí es donde se decide si el cambio se aplica.
+local adminUsernameSet = {}
+for _, username in ipairs(ProgressionConfig.AdminUsernames or {}) do
+	adminUsernameSet[username:lower()] = true
+end
+
+local function isAdmin(player)
+	return adminUsernameSet[player.Name:lower()] == true
+end
+
+local lastPadUse = {}
+local lastWinCollection = {}
+local lastSpeedGainAt = {}
+local playersOnConveyor = {}
+local runAnimationTracks = {}
+
+local function createStat(folder, className, name, defaultValue)
+	local stat = Instance.new(className)
+	stat.Name = name
+	stat.Value = defaultValue
+	stat.Parent = folder
+	return stat
+end
+
+local function getStats(player)
+	local leaderstats = player:FindFirstChild("leaderstats")
+	if not leaderstats then
+		return nil
+	end
+
+	return leaderstats:FindFirstChild("Speed"), leaderstats:FindFirstChild("Level"), leaderstats:FindFirstChild("Rebirths"), leaderstats:FindFirstChild("Wins")
+end
+
+local function updateWalkSpeed(player)
+	local speed = getStats(player)
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not speed or not humanoid then
+		return
+	end
+
+	humanoid.WalkSpeed = math.clamp(
+		ProgressionConfig.GetWalkSpeedForSpeed(speed.Value),
+		ProgressionConfig.BaseWalkSpeed,
+		ProgressionConfig.MaximumWalkSpeed
+	)
+end
+
+local function addSpeed(player)
+	local speed, _, rebirths, wins = getStats(player)
+	if not speed then
+		return nil
+	end
+
+	local rebirthMultiplier = ProgressionConfig.RebirthGainMultiplier ^ rebirths.Value
+	local speedGain = (ProgressionConfig.BaseSpeedGain * rebirthMultiplier) + ProgressionConfig.GetWinSpeedBonus(wins.Value)
+	speed.Value += speedGain
+	updateWalkSpeed(player)
+	return speedGain
+end
+
+local function tryLevelUp(player)
+	local speed, level = getStats(player)
+	if not speed or speed.Value < ProgressionConfig.GetSpeedRequiredForLevel(level.Value) then
+		return
+	end
+
+	speed.Value = 0
+	level.Value += 1
+	updateWalkSpeed(player)
+end
+
+local function tryRebirth(player)
+	local speed, level, rebirths = getStats(player)
+	if not speed or level.Value < ProgressionConfig.GetLevelRequiredForRebirth(rebirths.Value) then
+		return
+	end
+
+	speed.Value = 0
+	level.Value = 1
+	rebirths.Value += 1
+	updateWalkSpeed(player)
+end
+
+local function getPlayerFromTouchedPart(part)
+	local character = part and part:FindFirstAncestorOfClass("Model")
+	return character and Players:GetPlayerFromCharacter(character)
+end
+
+local function canUse(player, source, cooldownTable, cooldown)
+	cooldownTable[player] = cooldownTable[player] or {}
+	local now = os.clock()
+	local lastUse = cooldownTable[player][source] or 0
+	if now - lastUse < cooldown then
+		return false
+	end
+
+	cooldownTable[player][source] = now
+	return true
+end
+
+-- Se considera que el jugador "se está moviendo" si su Humanoid tiene
+-- una dirección de movimiento activa (está pulsando WASD / stick), o si
+-- está sobre la cinta transportadora (playersOnConveyor), aunque no esté
+-- pulsando ninguna tecla de movimiento. Quieto y fuera de la cinta = no
+-- gana Speed.
+local function isPlayerMoving(player)
+	if playersOnConveyor[player] then
+		return true
+	end
+
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then
+		return false
+	end
+
+	return humanoid.MoveDirection.Magnitude > 0
+end
+
+local function updateSpeedGain(player)
+	local speed = getStats(player)
+	if not speed then
+		return
+	end
+
+	local now = os.clock()
+
+	if not isPlayerMoving(player) then
+		-- No acumulamos tiempo de espera mientras está quieto: si no,
+		-- al reanudar el movimiento se dispararía una ganancia
+		-- instantánea por todo el tiempo parado.
+		lastSpeedGainAt[player] = now
+		return
+	end
+
+	local lastGain = lastSpeedGainAt[player] or now
+	local interval = ProgressionConfig.GetSpeedGainInterval(speed.Value)
+	if now - lastGain < interval then
+		return
+	end
+
+	lastSpeedGainAt[player] = now
+	local speedGain = addSpeed(player)
+	if speedGain then
+		speedGainedEvent:FireClient(player, speedGain)
+	end
+end
+
+local function getRunAnimationTrack(player)
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local animateScript = character and character:FindFirstChild("Animate")
+	if not humanoid or not animateScript then
+		return nil
+	end
+
+	local runFolder = animateScript:FindFirstChild("run")
+	local runAnimation = runFolder and runFolder:FindFirstChildOfClass("Animation")
+	if not runAnimation then
+		return nil
+	end
+
+	local animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
+	local ok, track = pcall(function()
+		return animator:LoadAnimation(runAnimation)
+	end)
+
+	if ok and track then
+		track.Priority = Enum.AnimationPriority.Action
+		track.Looped = true
+		return track
+	end
+
+	return nil
+end
+
+local function startTreadmillRunning(player)
+	if playersOnConveyor[player] then
+		return
+	end
+	playersOnConveyor[player] = true
+
+	local track = runAnimationTracks[player] or getRunAnimationTrack(player)
+	runAnimationTracks[player] = track
+	if track then
+		track:Play()
+	end
+end
+
+local function stopTreadmillRunning(player)
+	playersOnConveyor[player] = nil
+	local track = runAnimationTracks[player]
+	if track then
+		track:Stop()
+	end
+end
+
+local function connectWinBlock(winBlock)
+	if not winBlock:IsA("BasePart") then
+		return
+	end
+
+	winBlock.Touched:Connect(function(touchedPart)
+		local player = getPlayerFromTouchedPart(touchedPart)
+		if not player or not canUse(player, winBlock, lastWinCollection, 1) then
+			return
+		end
+
+		local _, _, _, wins = getStats(player)
+		if wins then
+			local winsReward = winBlock:GetAttribute("WinsReward") or 1
+			wins.Value += winsReward
+		end
+	end)
+end
+
+local function connectActionPad(actionPad, action)
+	if not actionPad:IsA("BasePart") then
+		return
+	end
+
+	actionPad.Touched:Connect(function(touchedPart)
+		local player = getPlayerFromTouchedPart(touchedPart)
+		if player and canUse(player, actionPad, lastPadUse, 1) then
+			action(player)
+		end
+	end)
+end
+
+local function connectConveyor(conveyorPart)
+	if not conveyorPart:IsA("BasePart") then
+		return
+	end
+
+	conveyorPart.Touched:Connect(function(touchedPart)
+		local player = getPlayerFromTouchedPart(touchedPart)
+		if player then
+			startTreadmillRunning(player)
+		end
+	end)
+
+	conveyorPart.TouchEnded:Connect(function(touchedPart)
+		local player = getPlayerFromTouchedPart(touchedPart)
+		if player then
+			stopTreadmillRunning(player)
+		end
+	end)
+end
+
+local function setupPlayer(player)
+	local leaderstats = Instance.new("Folder")
+	leaderstats.Name = "leaderstats"
+	leaderstats.Parent = player
+
+	createStat(leaderstats, "NumberValue", "Speed", 0)
+	createStat(leaderstats, "IntValue", "Level", 1)
+	createStat(leaderstats, "IntValue", "Rebirths", 0)
+	createStat(leaderstats, "IntValue", "Wins", 0)
+
+	lastSpeedGainAt[player] = os.clock()
+
+	player.CharacterAdded:Connect(function()
+		playersOnConveyor[player] = nil
+		runAnimationTracks[player] = nil
+		task.wait()
+		updateWalkSpeed(player)
+	end)
+end
+
+Players.PlayerAdded:Connect(setupPlayer)
+for _, player in ipairs(Players:GetPlayers()) do
+	setupPlayer(player)
+end
+
+Players.PlayerRemoving:Connect(function(player)
+	lastPadUse[player] = nil
+	lastWinCollection[player] = nil
+	lastSpeedGainAt[player] = nil
+	playersOnConveyor[player] = nil
+	runAnimationTracks[player] = nil
+end)
+
+for _, winBlock in ipairs(CollectionService:GetTagged("WinBlock")) do
+	connectWinBlock(winBlock)
+end
+CollectionService:GetInstanceAddedSignal("WinBlock"):Connect(connectWinBlock)
+
+for _, levelPad in ipairs(CollectionService:GetTagged("LevelUpPad")) do
+	connectActionPad(levelPad, tryLevelUp)
+end
+CollectionService:GetInstanceAddedSignal("LevelUpPad"):Connect(function(levelPad)
+	connectActionPad(levelPad, tryLevelUp)
+end)
+
+for _, rebirthPad in ipairs(CollectionService:GetTagged("RebirthPad")) do
+	connectActionPad(rebirthPad, tryRebirth)
+end
+CollectionService:GetInstanceAddedSignal("RebirthPad"):Connect(function(rebirthPad)
+	connectActionPad(rebirthPad, tryRebirth)
+end)
+
+local treadmillModel = Workspace:FindFirstChild("Treadmill")
+local conveyorPart = treadmillModel and treadmillModel:FindFirstChild("Conveyor")
+if conveyorPart then
+	connectConveyor(conveyorPart)
+else
+	warn("No se encontró Workspace.Treadmill.Conveyor; la cinta no animará ni se activará.")
+end
+
+adminAdjustSpeedEvent.OnServerEvent:Connect(function(player, delta)
+	if not isAdmin(player) then
+		warn(player.Name .. " intentó usar AdminAdjustSpeed sin ser admin.")
+		return
+	end
+
+	if typeof(delta) ~= "number" or delta ~= delta then -- delta ~= delta descarta NaN
+		return
+	end
+
+	local speed = getStats(player)
+	if not speed then
+		return
+	end
+
+	speed.Value = math.max(speed.Value + delta, 0)
+	updateWalkSpeed(player)
+end)
+
+RunService.Heartbeat:Connect(function()
+	for _, player in ipairs(Players:GetPlayers()) do
+		updateSpeedGain(player)
+	end
+end)
