@@ -1,0 +1,314 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local ProgressionConfig = require(ReplicatedStorage:WaitForChild("ProgressionConfig"))
+local localPlayer = Players.LocalPlayer
+
+local adminUsernameSet = {}
+for _, username in ipairs(ProgressionConfig.AdminUsernames or {}) do
+	adminUsernameSet[username:lower()] = true
+end
+
+-- Esto solo decide si SE MUESTRA el panel. La protección real está en el
+-- servidor (ProgressionServer valida el nombre otra vez antes de tocar
+-- cualquier Speed), así que aunque alguien se saltara esto localmente no
+-- conseguiría nada.
+if not adminUsernameSet[localPlayer.Name:lower()] then
+	return
+end
+
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
+local adminAdjustSpeedEvent = remotes:WaitForChild("AdminAdjustSpeed")
+local playerGui = localPlayer:WaitForChild("PlayerGui")
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "AdminPanel"
+screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 20
+screenGui.Parent = playerGui
+
+-- Botón flotante fijo abajo a la derecha, siempre visible, que abre y
+-- cierra el panel.
+local toggleButton = Instance.new("TextButton")
+toggleButton.Name = "ToggleButton"
+toggleButton.AnchorPoint = Vector2.new(1, 1)
+toggleButton.Position = UDim2.new(1, -20, 1, -20)
+toggleButton.Size = UDim2.fromOffset(52, 52)
+toggleButton.BackgroundColor3 = Color3.fromRGB(30, 30, 36)
+toggleButton.Font = Enum.Font.GothamBold
+toggleButton.Text = "⚙"
+toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleButton.TextSize = 22
+toggleButton.ZIndex = 21
+toggleButton.Parent = screenGui
+
+local toggleCorner = Instance.new("UICorner")
+toggleCorner.CornerRadius = UDim.new(1, 0)
+toggleCorner.Parent = toggleButton
+
+local toggleStroke = Instance.new("UIStroke")
+toggleStroke.Color = Color3.fromRGB(90, 90, 100)
+toggleStroke.Thickness = 1
+toggleStroke.Parent = toggleButton
+
+-- Panel principal, anclado también abajo a la derecha, justo encima del
+-- botón flotante. Empieza cerrado.
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.AnchorPoint = Vector2.new(1, 1)
+mainFrame.Position = UDim2.new(1, -20, 1, -84)
+mainFrame.Size = UDim2.fromOffset(280, 240)
+mainFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 26)
+mainFrame.BorderSizePixel = 0
+mainFrame.Visible = false
+mainFrame.ZIndex = 20
+mainFrame.Parent = screenGui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 14)
+corner.Parent = mainFrame
+
+local stroke = Instance.new("UIStroke")
+stroke.Color = Color3.fromRGB(80, 80, 92)
+stroke.Thickness = 1
+stroke.Parent = mainFrame
+
+local titleBar = Instance.new("Frame")
+titleBar.Name = "TitleBar"
+titleBar.BackgroundTransparency = 1
+titleBar.Size = UDim2.new(1, 0, 0, 34)
+titleBar.ZIndex = 20
+titleBar.Parent = mainFrame
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Name = "Title"
+titleLabel.BackgroundTransparency = 1
+titleLabel.Size = UDim2.new(1, -46, 1, 0)
+titleLabel.Position = UDim2.fromOffset(16, 0)
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.Text = "Panel de Admin"
+titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleLabel.TextSize = 16
+titleLabel.ZIndex = 20
+titleLabel.Parent = titleBar
+
+local closeButton = Instance.new("TextButton")
+closeButton.Name = "CloseButton"
+closeButton.AnchorPoint = Vector2.new(1, 0.5)
+closeButton.Position = UDim2.new(1, -10, 0.5, 0)
+closeButton.Size = UDim2.fromOffset(26, 26)
+closeButton.BackgroundColor3 = Color3.fromRGB(40, 40, 46)
+closeButton.Font = Enum.Font.GothamBold
+closeButton.Text = "X"
+closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeButton.TextSize = 13
+closeButton.ZIndex = 21
+closeButton.Parent = titleBar
+
+local closeButtonCorner = Instance.new("UICorner")
+closeButtonCorner.CornerRadius = UDim.new(0, 8)
+closeButtonCorner.Parent = closeButton
+
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Name = "SpeedLabel"
+speedLabel.BackgroundTransparency = 1
+speedLabel.Size = UDim2.new(1, -32, 0, 22)
+speedLabel.Position = UDim2.fromOffset(16, 40)
+speedLabel.TextXAlignment = Enum.TextXAlignment.Left
+speedLabel.Font = Enum.Font.Gotham
+speedLabel.Text = "Speed: --"
+speedLabel.TextColor3 = Color3.fromRGB(190, 190, 200)
+speedLabel.TextSize = 14
+speedLabel.ZIndex = 20
+speedLabel.Parent = mainFrame
+
+-- Fila de botones rápidos (múltiplos del step configurado).
+local quickButtonContainer = Instance.new("Frame")
+quickButtonContainer.Name = "QuickButtons"
+quickButtonContainer.BackgroundTransparency = 1
+quickButtonContainer.Size = UDim2.new(1, -32, 0, 40)
+quickButtonContainer.Position = UDim2.fromOffset(16, 70)
+quickButtonContainer.ZIndex = 20
+quickButtonContainer.Parent = mainFrame
+
+local quickListLayout = Instance.new("UIListLayout")
+quickListLayout.FillDirection = Enum.FillDirection.Horizontal
+quickListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+quickListLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+quickListLayout.Padding = UDim.new(0, 8)
+quickListLayout.Parent = quickButtonContainer
+
+local function createQuickButton(text, delta)
+	local button = Instance.new("TextButton")
+	button.Name = "Quick_" .. text
+	button.Size = UDim2.fromOffset(52, 40)
+	button.BackgroundColor3 = delta >= 0 and Color3.fromRGB(38, 122, 74) or Color3.fromRGB(128, 46, 46)
+	button.Font = Enum.Font.GothamBold
+	button.Text = text
+	button.TextColor3 = Color3.new(1, 1, 1)
+	button.TextSize = 14
+	button.ZIndex = 20
+	button.Parent = quickButtonContainer
+
+	local buttonCorner = Instance.new("UICorner")
+	buttonCorner.CornerRadius = UDim.new(0, 10)
+	buttonCorner.Parent = button
+
+	button.MouseButton1Click:Connect(function()
+		adminAdjustSpeedEvent:FireServer(delta)
+	end)
+
+	return button
+end
+
+local step = ProgressionConfig.AdminSpeedStep or 10
+createQuickButton("-" .. (step * 10), -step * 10)
+createQuickButton("-" .. step, -step)
+createQuickButton("+" .. step, step)
+createQuickButton("+" .. (step * 10), step * 10)
+
+-- Separador
+local divider = Instance.new("Frame")
+divider.Name = "Divider"
+divider.BackgroundColor3 = Color3.fromRGB(50, 50, 58)
+divider.BorderSizePixel = 0
+divider.Size = UDim2.new(1, -32, 0, 1)
+divider.Position = UDim2.fromOffset(16, 120)
+divider.ZIndex = 20
+divider.Parent = mainFrame
+
+-- Cantidad personalizada: el admin escribe el número y decide con qué
+-- botón se aplica (sumar o restar).
+local amountLabel = Instance.new("TextLabel")
+amountLabel.Name = "AmountLabel"
+amountLabel.BackgroundTransparency = 1
+amountLabel.Size = UDim2.new(1, -32, 0, 18)
+amountLabel.Position = UDim2.fromOffset(16, 132)
+amountLabel.Font = Enum.Font.Gotham
+amountLabel.Text = "Cantidad personalizada:"
+amountLabel.TextColor3 = Color3.fromRGB(150, 150, 160)
+amountLabel.TextSize = 12
+amountLabel.TextXAlignment = Enum.TextXAlignment.Left
+amountLabel.ZIndex = 20
+amountLabel.Parent = mainFrame
+
+local amountBox = Instance.new("TextBox")
+amountBox.Name = "AmountBox"
+amountBox.Size = UDim2.new(1, -32, 0, 34)
+amountBox.Position = UDim2.fromOffset(16, 154)
+amountBox.BackgroundColor3 = Color3.fromRGB(34, 34, 40)
+amountBox.PlaceholderText = "Ej: 250"
+amountBox.PlaceholderColor3 = Color3.fromRGB(110, 110, 120)
+amountBox.Text = ""
+amountBox.Font = Enum.Font.Gotham
+amountBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+amountBox.TextSize = 14
+amountBox.ClearTextOnFocus = false
+amountBox.ZIndex = 20
+amountBox.Parent = mainFrame
+
+local amountBoxCorner = Instance.new("UICorner")
+amountBoxCorner.CornerRadius = UDim.new(0, 8)
+amountBoxCorner.Parent = amountBox
+
+local amountBoxPadding = Instance.new("UIPadding")
+amountBoxPadding.PaddingLeft = UDim.new(0, 10)
+amountBoxPadding.PaddingRight = UDim.new(0, 10)
+amountBoxPadding.Parent = amountBox
+
+local applyButtonContainer = Instance.new("Frame")
+applyButtonContainer.Name = "ApplyButtons"
+applyButtonContainer.BackgroundTransparency = 1
+applyButtonContainer.Size = UDim2.new(1, -32, 0, 36)
+applyButtonContainer.Position = UDim2.fromOffset(16, 194)
+applyButtonContainer.ZIndex = 20
+applyButtonContainer.Parent = mainFrame
+
+local applyListLayout = Instance.new("UIListLayout")
+applyListLayout.FillDirection = Enum.FillDirection.Horizontal
+applyListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+applyListLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+applyListLayout.Padding = UDim.new(0, 8)
+applyListLayout.Parent = applyButtonContainer
+
+local function getTypedAmount()
+	local value = tonumber(amountBox.Text)
+	if not value then
+		return nil
+	end
+	return math.abs(value)
+end
+
+local function createApplyButton(text, color, sign)
+	local button = Instance.new("TextButton")
+	button.Name = "Apply_" .. text
+	button.Size = UDim2.new(0.5, -4, 1, 0)
+	button.BackgroundColor3 = color
+	button.Font = Enum.Font.GothamBold
+	button.Text = text
+	button.TextColor3 = Color3.new(1, 1, 1)
+	button.TextSize = 14
+	button.ZIndex = 20
+	button.Parent = applyButtonContainer
+
+	local buttonCorner = Instance.new("UICorner")
+	buttonCorner.CornerRadius = UDim.new(0, 8)
+	buttonCorner.Parent = button
+
+	button.MouseButton1Click:Connect(function()
+		local amount = getTypedAmount()
+		if not amount then
+			amountBox.PlaceholderText = "Escribe un número válido"
+			return
+		end
+
+		adminAdjustSpeedEvent:FireServer(amount * sign)
+	end)
+
+	return button
+end
+
+createApplyButton("Sumar", Color3.fromRGB(38, 122, 74), 1)
+createApplyButton("Restar", Color3.fromRGB(128, 46, 46), -1)
+
+local function bindSpeedLabel(speed)
+	speedLabel.Text = string.format("Speed: %.1f", speed.Value)
+	speed:GetPropertyChangedSignal("Value"):Connect(function()
+		speedLabel.Text = string.format("Speed: %.1f", speed.Value)
+	end)
+end
+
+local function watchLeaderstats()
+	local leaderstats = localPlayer:FindFirstChild("leaderstats")
+	if leaderstats then
+		local speed = leaderstats:FindFirstChild("Speed")
+		if speed then
+			bindSpeedLabel(speed)
+			return
+		end
+	end
+
+	localPlayer.ChildAdded:Connect(function(child)
+		if child.Name == "leaderstats" then
+			local speed = child:WaitForChild("Speed")
+			bindSpeedLabel(speed)
+		end
+	end)
+end
+
+watchLeaderstats()
+
+-- Abrir / cerrar
+local function setOpen(open)
+	mainFrame.Visible = open
+	toggleButton.Text = open and "×" or "⚙"
+end
+
+toggleButton.MouseButton1Click:Connect(function()
+	setOpen(not mainFrame.Visible)
+end)
+
+closeButton.MouseButton1Click:Connect(function()
+	setOpen(false)
+end)
