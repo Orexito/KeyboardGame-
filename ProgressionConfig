@@ -1,0 +1,77 @@
+local ProgressionConfig = {}
+
+-- Nombres de usuario (case-insensitive) que pueden ver y usar el
+-- Panel de Admin. Añade aquí los tuyos, p. ej.: { "TuUsuario", "Amigo2" }
+ProgressionConfig.AdminUsernames = { "miguelroblox948" }
+
+-- Incremento base que usan los botones rápidos del Panel de Admin
+-- (step, step, step*10, step*10 en negativo y positivo).
+ProgressionConfig.AdminSpeedStep = 10
+
+ProgressionConfig.BaseSpeedGain = 1
+ProgressionConfig.KeyGap = 0.2
+ProgressionConfig.KeyPressDepth = 0.6
+ProgressionConfig.MinimumKeyPressTime = 0.08
+
+-- Velocidad de movimiento: empieza muy lento y cada punto de Speed adicional
+-- pesa menos cuanto más Speed acumulado tengas (curva de raíz cuadrada), así
+-- que hace falta cada vez más Speed para ganar el mismo WalkSpeed.
+ProgressionConfig.BaseWalkSpeed = 6
+ProgressionConfig.WalkSpeedPerSqrtPoint = 1.4
+ProgressionConfig.MaximumWalkSpeed = 150
+
+-- Cadencia de ganancia de Speed: al empezar (Speed = 0) se gana cada
+-- SpeedGainIntervalMax segundos; a medida que tu Speed crece el intervalo
+-- baja suavemente hacia SpeedGainIntervalMin, sin llegar nunca a superarlo.
+-- SpeedGainIntervalHalfSpeed es el punto de Speed en el que ya estás a mitad
+-- de camino entre el intervalo lento y el rápido.
+ProgressionConfig.SpeedGainIntervalMax = 1.1
+ProgressionConfig.SpeedGainIntervalMin = 0.12
+ProgressionConfig.SpeedGainIntervalHalfSpeed = 60
+
+ProgressionConfig.RebirthGainMultiplier = 1.5
+ProgressionConfig.LevelStartingRequirement = 100
+ProgressionConfig.LevelRequirementGrowth = 1.35
+ProgressionConfig.RebirthStartingLevel = 5
+ProgressionConfig.RebirthLevelGrowth = 3
+
+ProgressionConfig.WinBonusTiers = {
+	{ WinsRequired = 10, BonusSpeed = 1 },
+	{ WinsRequired = 50, BonusSpeed = 3 },
+	{ WinsRequired = 150, BonusSpeed = 7 },
+	{ WinsRequired = 500, BonusSpeed = 15 },
+}
+
+function ProgressionConfig.GetWalkSpeedForSpeed(speedValue)
+	return ProgressionConfig.BaseWalkSpeed + ProgressionConfig.WalkSpeedPerSqrtPoint * math.sqrt(math.max(speedValue, 0))
+end
+
+function ProgressionConfig.GetSpeedGainInterval(speedValue)
+	local clampedSpeed = math.max(speedValue, 0)
+	local progress = clampedSpeed / (clampedSpeed + ProgressionConfig.SpeedGainIntervalHalfSpeed)
+	return ProgressionConfig.SpeedGainIntervalMax - progress * (ProgressionConfig.SpeedGainIntervalMax - ProgressionConfig.SpeedGainIntervalMin)
+end
+
+function ProgressionConfig.GetSpeedRequiredForLevel(level)
+	return math.floor(ProgressionConfig.LevelStartingRequirement * (level ^ ProgressionConfig.LevelRequirementGrowth))
+end
+
+function ProgressionConfig.GetLevelRequiredForRebirth(rebirths)
+	return ProgressionConfig.RebirthStartingLevel + (rebirths * ProgressionConfig.RebirthLevelGrowth)
+end
+
+function ProgressionConfig.GetWinSpeedBonus(wins)
+	local bonusSpeed = 0
+
+	for _, tier in ipairs(ProgressionConfig.WinBonusTiers) do
+		if wins >= tier.WinsRequired then
+			bonusSpeed = tier.BonusSpeed
+		else
+			break
+		end
+	end
+
+	return bonusSpeed
+end
+
+return ProgressionConfig
