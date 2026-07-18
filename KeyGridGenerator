@@ -1,0 +1,165 @@
+local CollectionService = game:GetService("CollectionService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local ProgressionConfig = require(ReplicatedStorage:WaitForChild("ProgressionConfig"))
+local keyTemplate = ReplicatedStorage:WaitForChild("Tecla")
+
+if not keyTemplate:IsA("Model") then
+	error("Tecla debe ser un Model dentro de ReplicatedStorage.")
+end
+
+local generatedKeysFolder = Workspace:FindFirstChild("TeclasGeneradas") or Instance.new("Folder")
+generatedKeysFolder.Name = "TeclasGeneradas"
+generatedKeysFolder.Parent = Workspace
+generatedKeysFolder:ClearAllChildren()
+
+local templateBoxCFrame, templateSize = keyTemplate:GetBoundingBox()
+local pivotToBox = keyTemplate:GetPivot():ToObjectSpace(templateBoxCFrame)
+local gap = ProgressionConfig.KeyGap or 0.2
+local randomGenerator = Random.new()
+local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+local pressedTopClearance = 0.08
+
+-- Lee la paleta de colores propia de un suelo. Se configura 100% desde
+-- Studio: dentro del suelo, crea un Folder llamado "KeyColors" y mete
+-- dentro un Color3Value por cada color que quieras que pueda salir en
+-- ese suelo (el nombre de cada Color3Value da igual, solo importa su
+-- Value). Si no hay carpeta o está vacía, las teclas de ese suelo
+-- mantienen el color original de la plantilla.
+local function readFloorPalette(floor)
+	local colorsFolder = floor:FindFirstChild("KeyColors")
+	if not colorsFolder then
+		return nil
+	end
+
+	local palette = {}
+	for _, child in ipairs(colorsFolder:GetChildren()) do
+		if child:IsA("Color3Value") then
+			table.insert(palette, child.Value)
+		end
+	end
+
+	if #palette == 0 then
+		return nil
+	end
+
+	return palette
+end
+
+-- Genera una lista de colores del mismo tamaño que el número de teclas,
+-- repartiendo la paleta a partes iguales (o lo más igual posible) y
+-- barajando el resultado, para que la distribución por el suelo sea
+-- aleatoria pero equilibrada entre colores (no salgan 90% de un color
+-- por azar).
+local function buildShuffledColorAssignments(palette, keyCount)
+	local assignments = {}
+	for index = 1, keyCount do
+		local paletteIndex = ((index - 1) % #palette) + 1
+		assignments[index] = palette[paletteIndex]
+	end
+
+	for index = keyCount, 2, -1 do
+		local swapIndex = randomGenerator:NextInteger(1, index)
+		assignments[index], assignments[swapIndex] = assignments[swapIndex], assignments[index]
+	end
+
+	return assignments
+end
+
+local function findColorablePart(key)
+	for _, instance in ipairs(key:GetDescendants()) do
+		if instance:IsA("BasePart") and CollectionService:HasTag(instance, "SpeedKey") then
+			return instance
+		end
+	end
+
+	return nil
+end
+
+local function prepareKey(key, assignedColor)
+	for _, instance in ipairs(key:GetDescendants()) do
+		if instance:IsA("BasePart") then
+			instance.Anchored = true
+			instance.CanCollide = false
+			instance.CanTouch = true
+			instance.CanQuery = true
+			instance:SetAttribute("PressDepth", math.max(instance.Size.Y - pressedTopClearance, 0))
+		end
+	end
+
+	local textLabel = key:FindFirstChildWhichIsA("TextLabel", true)
+	if textLabel then
+		local letterIndex = randomGenerator:NextInteger(1, #alphabet)
+		textLabel.Text = alphabet:sub(letterIndex, letterIndex)
+		textLabel.TextColor3 = Color3.new(1, 1, 1)
+		textLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+		textLabel.TextStrokeTransparency = 0
+	end
+
+	if assignedColor then
+		local colorablePart = findColorablePart(key)
+		if colorablePart then
+			colorablePart.Color = assignedColor
+		end
+	end
+end
+
+-- Genera la cuadrícula de teclas para un suelo concreto. Cada suelo
+-- etiquetado "KeyFloor" se procesa de forma independiente: su propio
+-- tamaño decide cuántas columnas/filas caben, y su propia carpeta
+-- "KeyColors" (si existe) decide qué colores pueden salir en él.
+local function generateKeysForFloor(floor)
+	if not floor:IsA("BasePart") then
+		warn(floor:GetFullName() .. " tiene la etiqueta KeyFloor pero no es una Part/MeshPart; se ignora.")
+		return
+	end
+
+	floor.CanCollide = true
+
+	local columns = math.floor((floor.Size.X + gap) / (templateSize.X + gap))
+	local rows = math.floor((floor.Size.Z + gap) / (templateSize.Z + gap))
+
+	if columns < 1 or rows < 1 then
+		warn(floor:GetFullName() .. " es demasiado pequeño para contener una Tecla completa; se ignora.")
+		return
+	end
+
+	local floorKeysFolder = Instance.new("Folder")
+	floorKeysFolder.Name = floor.Name .. "_Teclas"
+	floorKeysFolder.Parent = generatedKeysFolder
+
+	local gridWidth = (columns * templateSize.X) + ((columns - 1) * gap)
+	local gridDepth = (rows * templateSize.Z) + ((rows - 1) * gap)
+	local firstX = -gridWidth / 2 + templateSize.X / 2
+	local firstZ = -gridDepth / 2 + templateSize.Z / 2
+	local keyHeight = floor.Size.Y / 2 + templateSize.Y / 2
+
+	local palette = readFloorPalette(floor)
+	local colorAssignments = palette and buildShuffledColorAssignments(palette, columns * rows) or nil
+
+	local keyIndex = 0
+	for row = 0, rows - 1 do
+		for column = 0, columns - 1 do
+			keyIndex += 1
+
+			local key = keyTemplate:Clone()
+			local x = firstX + (column * (templateSize.X + gap))
+			local z = firstZ + (row * (templateSize.Z + gap))
+			local keyBoxCFrame = floor.CFrame * CFrame.new(x, keyHeight, z)
+
+			key.Parent = floorKeysFolder
+			key:PivotTo(keyBoxCFrame * pivotToBox:Inverse())
+			prepareKey(key, colorAssignments and colorAssignments[keyIndex])
+		end
+	end
+end
+
+-- Procesa todos los suelos que ya existan al arrancar, y también
+-- cualquiera que se etiquete más adelante (por ejemplo, si generas
+-- niveles dinámicamente).
+for _, floor in ipairs(CollectionService:GetTagged("KeyFloor")) do
+	generateKeysForFloor(floor)
+end
+
+CollectionService:GetInstanceAddedSignal("KeyFloor"):Connect(generateKeysForFloor)
